@@ -12,6 +12,7 @@ import numpy as np
 import scipy.stats
 import os
 import warnings
+from tqdm import tqdm
 import math
 warnings.filterwarnings("ignore")
 import warnings
@@ -23,6 +24,56 @@ def sort_spectra(msms):
     mass_sorted, intensity_sorted = zip(*sorted(zip(mass, intensity)))
     return(pack_spectra(list(mass_sorted), list(intensity_sorted)))
 
+def duplicate_handling(data, typeofmsms,mass_error = 0.01, ifppm = False, ifnormalize = True, method = 'weighedaverage'):
+    data_unique = data.drop_duplicates(subset=['key'])
+    consensus_msms = []
+    for key in tqdm(data_unique['key'].unique()):
+        data_temp =  data.loc[data['key']==key]
+        if method =='weighedaverage':
+            consensus_msms.append(weighted_average_spectra(data_temp, tolerance=mass_error, ppm = ifppm, typeofmsms =typeofmsms, ifnormalize=ifnormalize))
+        elif method =='consensus':
+            consensus_msms.append(make_consensus_spectra(data_temp, tolerance=mass_error, ppm = ifppm, typeofmsms =typeofmsms, ifnormalize=ifnormalize))
+        else:
+            print('please provide a valid duplicate handling method')
+
+    data_unique['msms']=consensus_msms
+    # print("i am done processing the concensus spectra")
+    return(data_unique)
+import toolsets.denoising_related_functions as de
+
+def denoising(data, typeofmsms, mass_error = 0.01, ifppm = False):
+    msms_consensus_denoised = []
+    for index, row in tqdm(data.iterrows(), total = data.shape[0]):
+    # break
+        try:
+            msms_consensus_denoised.append(de.denoise_blacklist(row, typeofmsms=typeofmsms, mass_error =mass_error, ppm = ifppm))
+        except:
+            msms_consensus_denoised.append(row['msms'])
+    data['msms_denoised']=msms_consensus_denoised
+    return(data)
+
+
+def denoising_evaluation(data, msms1 = 'msms', msms2 = 'msms_denoised', min_explained_intensity = 80, allowed_max_unassigned_intensity = 30):
+    explained_intensity = []
+    max_unassigned_intensity = []
+    for index, row in (data.iterrows()):
+        explained_intensity.append(calculate_explained_intensity(row[msms1], row[msms2]))
+        max_unassigned_intensity.append(identify_max_unassigned_intensity(row[msms1], row[msms2]))
+    data['explained_intensity']=explained_intensity
+    data['max_unassigned_intensity']=max_unassigned_intensity
+    evaluations = []
+    # print(min_explained_intensity/10)
+    for index, row in (data.iterrows()):
+        if row['explained_intensity']<min_explained_intensity/100 and row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
+            evaluations.append('flagged: poor quality')
+        elif row['explained_intensity']<min_explained_intensity/100:
+            evaluations.append('flagged:low assigned intensity')
+        elif row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
+            evaluations.append('flagged: high unassigned intensity')
+        else:
+            evaluations.append('good quality')
+    data['evaluations']=evaluations
+    return(data)
 
 
 def bin_spectra(msms, precursormz,tolerance = 0.01, ifnormalize = False, ppm = False):
@@ -256,16 +307,16 @@ def average_entropy_dataframe(data_pfp, typeofmsms):
     data_pfp['Average_Entropy']= flat
     return(data_pfp)
 
-def duplicate_handling(data):
-    data_final = pd.DataFrame()
-    for i in data['key'].unique():
-        temp_df = data.loc[data.key == i,:]
-        if(len(temp_df) ==1):
-            data_final = pd.concat([data_final, temp_df], ignore_index = True, axis = 0)
-        else:
-            if(temp_df.iloc[0]['Average_Entropy'] >= 0.5):
-                data_final = pd.concat([data_final, temp_df[temp_df['intensity'] == temp_df['intensity'].max()]], ignore_index = True, axis = 0)
-    return(data_final)
+# def duplicate_handling(data):
+#     data_final = pd.DataFrame()
+#     for i in data['key'].unique():
+#         temp_df = data.loc[data.key == i,:]
+#         if(len(temp_df) ==1):
+#             data_final = pd.concat([data_final, temp_df], ignore_index = True, axis = 0)
+#         else:
+#             if(temp_df.iloc[0]['Average_Entropy'] >= 0.5):
+#                 data_final = pd.concat([data_final, temp_df[temp_df['intensity'] == temp_df['intensity'].max()]], ignore_index = True, axis = 0)
+#     return(data_final)
 
 
 
@@ -318,7 +369,7 @@ def normalize_spectra(msms):
 
 
 # below is some evaluation functions
-def explained_intensity(msms1, msms2):
+def calculate_explained_intensity(msms1, msms2):
     if(num_peaks(msms1)<num_peaks(msms2)):
         temp_msms = msms1
         msms1 = msms2
@@ -327,7 +378,7 @@ def explained_intensity(msms1, msms2):
     mass_dr, intensity_dr = break_spectra(msms2)
     return(sum(intensity_dr)/sum(intensity_raw))
 
-def max_unassigned_intensity(msms1, msms2):
+def identify_max_unassigned_intensity(msms1, msms2):
     if(num_peaks(msms1)<num_peaks(msms2)):
         temp_msms = msms1
         msms1 = msms2

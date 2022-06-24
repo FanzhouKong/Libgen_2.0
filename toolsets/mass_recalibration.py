@@ -39,23 +39,7 @@ def mass_recalibrate(lm, msms):
     return(msms_recali)
         
 
-def data_recalibrate(data):
-    # automatically recalibrate the whole dataset, based on all mixes
-    data_recalibrated = pd.DataFrame()
-    for i in data['mix_label'].unique():
-        data_temp = data.loc[data['mix_label']==i]
-        x_temp = data_temp['Average_mz']
-        y_temp = data_temp['PRECURSORMZ']
-        lm_temp = fit_model(x_temp, y_temp)
-        msms_recalibrated = []
-        for n in range(len(data_temp)):
-            msms_recalibrated.append(mass_recalibrate(lm_temp, data_temp.iloc[n]['msms']))
-        data_temp['msms_recalibrated']=msms_recalibrated
-        data_recalibrated = pd.concat([data_recalibrated, data_temp], ignore_index = True, axis = 0)
-    return(data_recalibrated)
-
-
-def data_recalibrate_precursor(data):
+def data_recalibrate(data, save_diff = False):
     # automatically recalibrate the whole dataset, based on all mixes
     data_recalibrated = pd.DataFrame()
     diff_raw = pd.Series()
@@ -68,19 +52,46 @@ def data_recalibrate_precursor(data):
         lm_temp = fit_model(x_temp, y_temp)
         y_pred = lm_temp.predict(np.array(x_temp, dtype = float ).reshape(-1,1))
         diff_recalibrated=diff_recalibrated.append((x_temp-y_pred))
-    # return (, )
         msms_recalibrated = []
         for n in range(len(data_temp)):
             msms_recalibrated.append(mass_recalibrate(lm_temp, data_temp.iloc[n]['msms']))
         data_temp['msms_recalibrated']=msms_recalibrated
         data_recalibrated = pd.concat([data_recalibrated, data_temp], ignore_index = True, axis = 0)
-        # break
-    data_recalibrated['diff_raw']=diff_raw.tolist()
-    data_recalibrated['diff_recalibrated']=diff_recalibrated.tolist()
+    if save_diff == True:
+        data_recalibrated['diff_raw']=diff_raw.tolist()
+        data_recalibrated['diff_recalibrated']=diff_recalibrated.tolist()
     return(data_recalibrated)
-    # data_recalibrated['diff_raw']=diff_raw
-    # data_recalibrated['diff_recalibrated']=diff_recalibrated
-    # return(data_recalibrated)
+
+
+
+
+#
+# def data_recalibrate_precursor(data):
+#     # automatically recalibrate the whole dataset, based on all mixes
+#     data_recalibrated = pd.DataFrame()
+#     diff_raw = pd.Series()
+#     diff_recalibrated = pd.Series()
+#     for i in data['mix_label'].unique():
+#         data_temp = data.loc[data['mix_label']==i]
+#         x_temp = data_temp['Average_mz']
+#         y_temp = data_temp['PRECURSORMZ']
+#         diff_raw = diff_raw.append((x_temp-y_temp))
+#         lm_temp = fit_model(x_temp, y_temp)
+#         y_pred = lm_temp.predict(np.array(x_temp, dtype = float ).reshape(-1,1))
+#         diff_recalibrated=diff_recalibrated.append((x_temp-y_pred))
+#     # return (, )
+#         msms_recalibrated = []
+#         for n in range(len(data_temp)):
+#             msms_recalibrated.append(mass_recalibrate(lm_temp, data_temp.iloc[n]['msms']))
+#         data_temp['msms_recalibrated']=msms_recalibrated
+#         data_recalibrated = pd.concat([data_recalibrated, data_temp], ignore_index = True, axis = 0)
+#         # break
+#     data_recalibrated['diff_raw']=diff_raw.tolist()
+#     data_recalibrated['diff_recalibrated']=diff_recalibrated.tolist()
+#     return(data_recalibrated)
+#     # data_recalibrated['diff_raw']=diff_raw
+#     # data_recalibrated['diff_recalibrated']=diff_recalibrated
+#     # return(data_recalibrated)
 
 
 # In[2]:
