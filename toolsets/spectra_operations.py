@@ -8,11 +8,11 @@ import re
 import pandas as pd
 import spectral_entropy as se
 import itertools
+from tqdm import tqdm
 import numpy as np
 import scipy.stats
 import os
 import warnings
-from tqdm import tqdm
 import math
 warnings.filterwarnings("ignore")
 import warnings
@@ -24,60 +24,19 @@ def sort_spectra(msms):
     mass_sorted, intensity_sorted = zip(*sorted(zip(mass, intensity)))
     return(pack_spectra(list(mass_sorted), list(intensity_sorted)))
 
-def duplicate_handling(data, typeofmsms,mass_error = 0.01, ifppm = False, ifnormalize = True, method = 'weighedaverage'):
-    data_unique = data.drop_duplicates(subset=['key'])
-    consensus_msms = []
-    for key in tqdm(data_unique['key'].unique()):
-        data_temp =  data.loc[data['key']==key]
-        if method =='weighedaverage':
-            consensus_msms.append(weighted_average_spectra(data_temp, tolerance=mass_error, ppm = ifppm, typeofmsms =typeofmsms, ifnormalize=ifnormalize))
-        elif method =='consensus':
-            consensus_msms.append(make_consensus_spectra(data_temp, tolerance=mass_error, ppm = ifppm, typeofmsms =typeofmsms, ifnormalize=ifnormalize))
+def set_tolerance(mass_error, ifppm, precursormz):
+    if ifppm:
+        if float(precursormz) <400:
+            tol = 0.004
         else:
-            print('please provide a valid duplicate handling method')
-
-    data_unique['msms']=consensus_msms
-    # print("i am done processing the concensus spectra")
-    return(data_unique)
-import toolsets.denoising_related_functions as de
-
-def denoising(data, typeofmsms, mass_error = 0.01, ifppm = False):
-    msms_consensus_denoised = []
-    for index, row in tqdm(data.iterrows(), total = data.shape[0]):
-    # break
-        try:
-            msms_consensus_denoised.append(de.denoise_blacklist(row, typeofmsms=typeofmsms, mass_error =mass_error, ppm = ifppm))
-        except:
-            msms_consensus_denoised.append(row['msms'])
-    data['msms_denoised']=msms_consensus_denoised
-    return(data)
+            tol = float(precursormz)*(mass_error/1E6)
+    else:
+        tol = mass_error
+    return(tol)
 
 
-def denoising_evaluation(data, msms1 = 'msms', msms2 = 'msms_denoised', min_explained_intensity = 80, allowed_max_unassigned_intensity = 30):
-    explained_intensity = []
-    max_unassigned_intensity = []
-    for index, row in (data.iterrows()):
-        explained_intensity.append(calculate_explained_intensity(row[msms1], row[msms2]))
-        max_unassigned_intensity.append(identify_max_unassigned_intensity(row[msms1], row[msms2]))
-    data['explained_intensity']=explained_intensity
-    data['max_unassigned_intensity']=max_unassigned_intensity
-    evaluations = []
-    # print(min_explained_intensity/10)
-    for index, row in (data.iterrows()):
-        if row['explained_intensity']<min_explained_intensity/100 and row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
-            evaluations.append('flagged: poor quality')
-        elif row['explained_intensity']<min_explained_intensity/100:
-            evaluations.append('flagged:low assigned intensity')
-        elif row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
-            evaluations.append('flagged: high unassigned intensity')
-        else:
-            evaluations.append('good quality')
-    data['evaluations']=evaluations
-    return(data)
-
-
-def bin_spectra(msms, precursormz,tolerance = 0.01, ifnormalize = False, ppm = False):
-    if ppm:
+def bin_spectra(msms, precursormz,tolerance = 0.01, ifnormalize = False, ifppm = False):
+    if ifppm:
         if float(precursormz) <400:
             tol = 0.004
         else:
@@ -106,6 +65,51 @@ def bin_spectra(msms, precursormz,tolerance = 0.01, ifnormalize = False, ppm = F
     else:
         return(msms_bin)
 
+def weighted_average_spectra(data_subset, typeofmsms = 'msms', mass_error = 10, ifppm = True):
+    # if(len(data_subset)<2):
+    #     print("you cannot make weighted average spectra using only 1 spectra")
+    #     return(np.NAN)
+    precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
+    tol = set_tolerance(mass_error, ifppm = ifppm, precursormz=precursormz)
+
+    # msms_com = []
+    mass_com = []
+    intensity_com = []
+    ms1_intensity_com =[]
+    # sum = 0
+    for index, row in data_subset.iterrows():
+        msms_bin_temp =normalize_spectra(row[typeofmsms])
+        # msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=False, ifppm =ifppm)
+        # msms_bin_temp = row[typeofmsms]
+        mass_temp, intensity_temp = break_spectra(msms_bin_temp)
+        mass_com.extend(mass_temp)
+        intensity_com.extend(intensity_temp)
+        # num_peaks_com.extend(len(mass_temp))
+        ms1_intensity_com.extend([row['intensity']]*len(mass_temp))
+        # sum = sum +row['intensity']
+    bin_left = pd.DataFrame({'mass': mass_com, 'intensity': intensity_com, 'ms1_intensity':ms1_intensity_com})
+    # return(bin_left)
+    mass_consensus = []
+    intensity_consensus =[]
+    while(len(bin_left)>0):
+        bin, bin_left = make_bin(bin_left, tol)
+        sum = bin['ms1_intensity'].sum()
+        # if ifold:
+        #     sum =bin['ms1_intensity'].unique().sum()
+        # else:
+        #     sum =bin['ms1_intensity'].sum()
+        temp_mass = bin['mass']*bin['ms1_intensity']/sum
+        temp_intensity =bin['intensity']*bin['ms1_intensity']/sum
+        mass_consensus.append(round(temp_mass.sum(),6))
+        intensity_consensus.append(round(temp_intensity.sum(),6))
+
+    msms_consensus = sort_spectra(pack_spectra(mass_consensus, intensity_consensus))
+    # msms_consensus = bin_spectra(msms_consensus,precursormz,tol, ifnormalize=True, ifppm =ifppm)
+    msms_consensus = normalize_spectra(msms_consensus)
+    return(msms_consensus)
+
+
+
 
 def make_bin(bin_left, tol):
     max_index = bin_left['intensity'].idxmax()
@@ -115,9 +119,9 @@ def make_bin(bin_left, tol):
 
 
 
-def make_composite_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, ifnormalize = False, ppm = False):
+def make_composite_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, ifnormalize = False, ifppm = False):
     precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
-    if ppm:
+    if ifppm:
         if precursormz <400:
             tol = 0.004
         else:
@@ -127,102 +131,73 @@ def make_composite_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, i
     mass_com = []
     intensity_com = []
     for index, row in data_subset.iterrows():
-        # msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=ifnormalize, ppm =ppm)
 
         mass_temp, intensity_temp = break_spectra(normalize_spectra(row[typeofmsms]) )
         mass_com.extend(mass_temp)
         intensity_com.extend(intensity_temp)
     msms_com = sort_spectra(pack_spectra(mass_com, intensity_com))
-    msms_com = bin_spectra(msms_com,precursormz, tol, ppm =ppm, ifnormalize=ifnormalize)
+    msms_com = bin_spectra(msms_com,precursormz, tol, ifppm =ifppm, ifnormalize=ifnormalize)
     return((msms_com))
 
 
 
 
-
-
-
-def weighted_average_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, ifnormalize = True, ppm = False, ifold = False):
-    # if(len(data_subset)<2):
-    #     print("you cannot make weighted average spectra using only 1 spectra")
-    #     return(np.NAN)
-    precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
-    if ppm:
-        if precursormz <400:
-            tol = 0.004
-        else:
-            tol = precursormz*(tolerance/1E6)
-    else:
-        tol = tolerance
-    # msms_com = []
+def adding_spectra(data_subset, typeofmsms = 'msms'):
     mass_com = []
     intensity_com = []
-    ms1_intensity_com =[]
     for index, row in data_subset.iterrows():
-        msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=ifnormalize, ppm =ppm)
-        mass_temp, intensity_temp = break_spectra(msms_bin_temp)
+        # msms_bin_temp =normalize_spectra(row[typeofmsms])
+        # msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=False, ifppm =ifppm)
+        mass_temp, intensity_temp = break_spectra(row[typeofmsms])
         mass_com.extend(mass_temp)
         intensity_com.extend(intensity_temp)
-        ms1_intensity_com.extend([row['intensity']]*len(mass_temp))
-    bin_left = pd.DataFrame({'mass': mass_com, 'intensity': intensity_com, 'ms1_intensity':ms1_intensity_com})
-    # return(bin_left)
-    mass_consensus = []
-    intensity_consensus =[]
-
-    while(len(bin_left)>0):
-        bin, bin_left = make_bin(bin_left, tol)
-        if ifold:
-            sum =bin['ms1_intensity'].unique().sum()
-        else:
-            sum =bin['ms1_intensity'].sum()
-        temp_mass = bin['mass']*bin['ms1_intensity']/sum
-        temp_intensity =bin['intensity']*bin['ms1_intensity']/sum
-        mass_consensus.append(round(temp_mass.sum(),6))
-        intensity_consensus.append(round(temp_intensity.sum(),6))
-
-    msms_consensus = sort_spectra(pack_spectra(mass_consensus, intensity_consensus))
-    msms_consensus = bin_spectra(msms_consensus,precursormz,ifnormalize=ifnormalize)
-    return(msms_consensus)
+        # num_peaks_com.extend(len(mass_temp))
+    msms_added = sort_spectra(pack_spectra(mass_com, intensity_com))
+    msms_added = normalize_spectra(msms_added)
+    return(msms_added)
 
 
 
-def make_consensus_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, ifnormalize = False, ppm = False):
-    # if(len(data_subset)<2):
-    #     print("you cannot make weighted average spectra using only 1 spectra")
-    #     return(np.NAN)
-    precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
 
-    mass_consensus = []
-    intensity_consensus =[]
-    mass_com =[]
-    intensity_com=[]
-    if ppm:
-        if float(precursormz) <400:
-            tol = 0.004
-        else:
-            tol = float(precursormz)*(tolerance/1E6)
-    else:
-        tol = tolerance
-    # for msms in msms_s:
-    #     msms_bin_temp = bin_spectra(msms,precursormz, tolerance=tol,ifnormalize=ifnormalize, ppm =ppm)
-    #     mass_temp, intensity_temp = break_spectra(msms_bin_temp)
-    #     mass_com.extend(mass_temp)
-    #     intensity_com.extend(intensity_temp)
-    for index, row in data_subset.iterrows():
-        msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=ifnormalize, ppm =ppm)
-        mass_temp, intensity_temp = break_spectra(msms_bin_temp)
-        mass_com.extend(mass_temp)
-        intensity_com.extend(intensity_temp)
-        # ms1_intensity_com.extend([row['intensity']]*len(mass_temp))
-    bin_left = pd.DataFrame({'mass': mass_com, 'intensity': intensity_com})
 
-    while(len(bin_left)>0):
-        bin, bin_left = make_bin(bin_left, tol)
-        mass_consensus.append(round(bin['mass'].median(), 6))
-        intensity_consensus.append(round(bin['intensity'].median(),6))
-    msms_consensus = sort_spectra(pack_spectra(mass_consensus, intensity_consensus))
-    msms_consensus = normalize_spectra(msms_consensus)
-    return(msms_consensus)
+
+# def make_consensus_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, ifnormalize = False, ifppm = False):
+#     # if(len(data_subset)<2):
+#     #     print("you cannot make weighted average spectra using only 1 spectra")
+#     #     return(np.NAN)
+#     precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
+#
+#     mass_consensus = []
+#     intensity_consensus =[]
+#     mass_com =[]
+#     intensity_com=[]
+#     if ifppm:
+#         if float(precursormz) <400:
+#             tol = 0.004
+#         else:
+#             tol = float(precursormz)*(tolerance/1E6)
+#     else:
+#         tol = tolerance
+#     # for msms in msms_s:
+#     #     msms_bin_temp = bin_spectra(msms,precursormz, tolerance=tol,ifnormalize=ifnormalize, ppm =ppm)
+#     #     mass_temp, intensity_temp = break_spectra(msms_bin_temp)
+#     #     mass_com.extend(mass_temp)
+#     #     intensity_com.extend(intensity_temp)
+#     for index, row in data_subset.iterrows():
+#         msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=ifnormalize, ifppm =ifppm)
+#         mass_temp, intensity_temp = break_spectra(msms_bin_temp)
+#         mass_com.extend(mass_temp)
+#         intensity_com.extend(intensity_temp)
+#         # ms1_intensity_com.extend([row['intensity']]*len(mass_temp))
+#     bin_left = pd.DataFrame({'mass': mass_com, 'intensity': intensity_com})
+#
+#     while(len(bin_left)>0):
+#         bin, bin_left = make_bin(bin_left, tol)
+#         mass_consensus.append(round(bin['mass'].median(), 6))
+#         intensity_consensus.append(round(bin['intensity'].median(),6))
+#     msms_consensus = sort_spectra(pack_spectra(mass_consensus, intensity_consensus))
+#     msms_consensus = normalize_spectra(msms_consensus)
+#     return(msms_consensus)
 
 
 
@@ -307,16 +282,60 @@ def average_entropy_dataframe(data_pfp, typeofmsms):
     data_pfp['Average_Entropy']= flat
     return(data_pfp)
 
-# def duplicate_handling(data):
-#     data_final = pd.DataFrame()
-#     for i in data['key'].unique():
-#         temp_df = data.loc[data.key == i,:]
-#         if(len(temp_df) ==1):
-#             data_final = pd.concat([data_final, temp_df], ignore_index = True, axis = 0)
-#         else:
-#             if(temp_df.iloc[0]['Average_Entropy'] >= 0.5):
-#                 data_final = pd.concat([data_final, temp_df[temp_df['intensity'] == temp_df['intensity'].max()]], ignore_index = True, axis = 0)
-#     return(data_final)
+def duplicate_handling(data, typeofmsms='msms_recalibrated',mass_error = 0.01, ifppm = False, ifnormalize = True, method = 'weighedaverage'):
+    data_unique = data.drop_duplicates(subset=['key'])
+    # print("i am in new method")
+    consensus_msms = []
+    for key in tqdm(data_unique['key'].unique()):
+        data_temp =  data.loc[data['key']==key]
+        if len(data_temp) >1:
+            if method =='weighedaverage':
+                consensus_msms.append(weighted_average_spectra(data_temp, mass_error=mass_error, ifppm = ifppm, typeofmsms =typeofmsms))
+            # else:
+            #     consensus_msms.append(make_consensus_spectra(data_temp, tolerance=mass_error, ifppm = ifppm, typeofmsms =typeofmsms, ifnormalize=ifnormalize))
+        else:
+            consensus_msms.append(normalize_spectra(data_temp.iloc[0][typeofmsms]))
+
+
+    data_unique['msms']=consensus_msms
+    # print("i am done processing the concensus spectra")
+    return(data_unique)
+import toolsets.denoising_related_functions as de
+
+def denoising(data, typeofmsms, mass_error = 0.01, ifppm = False):
+    msms_consensus_denoised = []
+    # print("i am in new denoising method")
+    for index, row in tqdm(data.iterrows(), total = data.shape[0]):
+    # break
+        try:
+            msms_consensus_denoised.append(de.denoise_blacklist(row, typeofmsms=typeofmsms, mass_error =mass_error, ifppm = ifppm))
+        except:
+            msms_consensus_denoised.append(row[typeofmsms])
+    data['msms_r_u_d']=msms_consensus_denoised
+    return(data)
+
+
+def denoising_evaluation(data, msms1 = 'msms', msms2 = 'msms_denoised', min_explained_intensity = 80, allowed_max_unassigned_intensity = 30):
+    explained_intensity = []
+    max_unassigned_intensity = []
+    for index, row in (data.iterrows()):
+        explained_intensity.append(calculate_explained_intensity(row[msms1], row[msms2]))
+        max_unassigned_intensity.append(identify_max_unassigned_intensity(row[msms1], row[msms2]))
+    data['explained_intensity']=explained_intensity
+    data['max_unassigned_intensity']=max_unassigned_intensity
+    evaluations = []
+    # print(min_explained_intensity/10)
+    for index, row in (data.iterrows()):
+        if row['explained_intensity']<min_explained_intensity/100 and row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
+            evaluations.append('flagged: poor quality')
+        elif row['explained_intensity']<min_explained_intensity/100:
+            evaluations.append('flagged:low assigned intensity')
+        elif row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
+            evaluations.append('flagged: high unassigned intensity')
+        else:
+            evaluations.append('good quality')
+    data['evaluations']=evaluations
+    return(data)
 
 
 
@@ -342,11 +361,11 @@ from operator import itemgetter
 
 def normalize_spectra(msms):
     mass, intensity = break_spectra(msms)
-    mass_fl = [float(x) for x in mass]
+    # mass_fl = [float(x) for x in mass]
     # intensity_fl = [float(x) for x in intensity]
     intensity_rel = [number / max([float(x) for x in intensity])*100 for number in [float(y) for y in intensity]]
     intensity_rel = [round(number, 6) for number in intensity_rel]
-    return(pack_spectra(mass_fl, intensity_rel))
+    return(pack_spectra(mass, intensity_rel))
 
 
 # def comparing_spectrum(msms1, msms2):
@@ -399,19 +418,33 @@ def identify_max_unassigned_intensity(msms1, msms2):
     #
     # return(mass_diff)
 
+def identify_unassigned_intensity(msms1, msms2):
+    if(num_peaks(msms1)<num_peaks(msms2)):
+        temp_msms = msms1
+        msms1 = msms2
+        msms2 = temp_msms
+    mass_raw, intensity_raw = break_spectra(msms1)
+    mass_de, intensity_de = break_spectra(msms2)
+    diff_index = [i for i, item in enumerate(mass_raw) if item not in set(mass_de)]
+    if(len(diff_index)>1):
+        # print("i am in wrong if")
+        intensity_diff = list(itemgetter(*diff_index)(intensity_raw))
+
+        return(intensity_diff)
+    elif(len(diff_index)==1):
+        # print("i am in right if")
+        return([float(intensity_raw[diff_index[0]])])
+    else:
+        return(-1)
 
 
-
-
-
-
-def export_library(data_dup,output_location, typeofmsms='msms', ifcollision_energy = False):
+def export_library_msp(data_dup,output_location, typeofmsms='msms', ifcollision_energy = False):
     entry = ''
     for index, row in data_dup.iterrows():
         entry = entry + 'Name: ' + row['NAME'] + '\n'
         entry = entry +'Spectrum_type: '+row['Spectrum_type']+ '\n'
         entry = entry + 'PrecursorMZ: ' + str(row['PRECURSORMZ']) + '\n'
-        entry = entry + 'InChIKey: ' + row['InChIKey'] + '\n'
+        entry = entry + 'InChIKey: ' + str(row['InChIKey']) + '\n'
         entry = entry + 'Formula: ' + row['Formula'] + '\n'
         entry = entry + 'ExactMass: ' + str(row['ExactMass']) + '\n'
         entry = entry + 'Precursor_type: ' + row['Adduct'] + '\n'

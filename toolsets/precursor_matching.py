@@ -5,13 +5,16 @@ import numpy as np
 def readin_MSDIAL(file):
     df = pd.read_csv(file, sep = '\t', header=[4])
     return(df)
-def precursor_matching(df, sample_list, mzmmu, adducts, comments, CE = None,threshold = 0.3, ppm = False):
+def precursor_matching(df, sample_list, mzmmu, adducts, comments, CE = None,threshold = 0.3, ifppm = False, iffill = True):
     # print("i am updated!")
     # mz_mmu = mzmmu
     data_raw = pd.DataFrame(columns = ['NAME','key','PRECURSORMZ','InChIKey','Formula',
                        'ExactMass','Adduct','Spectrum_type','RETENTIONTIME','Average_mz',
                        'Comment', 'Alignment_ID','ms1','msms','Collision_energy','intensity','mix_label'])
-    ms2df = df.loc[(df['MS/MS assigned']) & (df['Fill %'] < threshold)]
+    if iffill == True:
+        ms2df = df.loc[(df['MS/MS assigned']) & (df['Fill %'] < threshold)]
+    else:
+        ms2df = df.loc[(df['MS/MS assigned'])]
     # parameters
     # this is already matching the spectrum in the same data file
     spectrum_type = 'MS2'
@@ -22,7 +25,7 @@ def precursor_matching(df, sample_list, mzmmu, adducts, comments, CE = None,thre
             msms = df_row['MS/MS spectrum'].replace(' ', '\n').replace(':', '\t')
             ms1 = df_row['MS1 isotopic spectrum'].replace(' ', '\n').replace(':', '\t')
             nlines = msms.count('\n')+1
-            if ppm:
+            if ifppm:
                 if df_row['Average Mz']<400:
                     mz_lower= df_row['Average Mz'] - 0.004
                     mz_upper = df_row['Average Mz'] + 0.004
@@ -43,7 +46,7 @@ def precursor_matching(df, sample_list, mzmmu, adducts, comments, CE = None,thre
                     if ls_row[adduct] > mz_lower  and ls_row[adduct] < mz_upper:
                         data_raw = data_raw.append({
                                                         'NAME':ls_row['Name'],
-                                                       'key':ls_row['InChIKey']+adduct,
+                                                       'key':str(ls_row['InChIKey'])+adduct,
                                                         'Ion_mode':ion_mode,
                                                        'PRECURSORMZ':(float(ls_row[adduct])),
                                                        'InChIKey':ls_row['InChIKey'],
@@ -79,6 +82,7 @@ def precursor_matching(df, sample_list, mzmmu, adducts, comments, CE = None,thre
     # data_raw['intensity']=pd.to_numeric(data_raw['intensity'])
     # data_raw['Num_Peaks']=pd.to_numeric(data_raw['Num_Peaks'])
     # data_raw['RETENTIONTIME']=pd.to_numeric(data_raw['RETENTIONTIME'])
+    data_raw.reset_index(inplace=True, drop=True)
     return(data_raw)
 
 def precursor_matching_rt(df, sample_list, mzmmu, adducts, comments, CE = None,threshold = 0.3, ppm = False):

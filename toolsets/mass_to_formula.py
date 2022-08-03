@@ -103,16 +103,16 @@ class MolecularFormula(object):
         return np.sum(atom_mass_array * self._data)
 
 
-def mass_to_formula(mass, mass_error, addition, precursor_formula=None):
-    mass = float(mass)
-    mass_error = float(mass_error)
-    if precursor_formula is None:
-        return precursor_mass_to_formula(mass, mass_error, addition)
-    else:
-        mol = MolecularFormula()
-        mol.from_string(precursor_formula)
-        result = product_mass_to_formula(mass, mass_error, addition, mol)
-        return result
+# def mass_to_formula(mass, mass_error, addition, precursor_formula=None):
+#     mass = float(mass)
+#     mass_error = float(mass_error)
+#     if precursor_formula is None:
+#         return precursor_mass_to_formula(mass, mass_error, addition)
+#     else:
+#         mol = MolecularFormula()
+#         mol.from_string(precursor_formula)
+#         result = product_mass_to_formula(mass, mass_error, addition, mol)
+#         return result
 
 def nl_to_formula(mass, mass_error, molecular_formula):
     mass = float(mass)
