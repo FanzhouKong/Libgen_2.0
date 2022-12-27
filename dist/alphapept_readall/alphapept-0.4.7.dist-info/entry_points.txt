@@ -1,0 +1,2 @@
+[console_scripts]
+alphapept = alphapept.__main__:main

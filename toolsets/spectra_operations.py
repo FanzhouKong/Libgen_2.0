@@ -12,6 +12,7 @@ from tqdm import tqdm
 import numpy as np
 import scipy.stats
 import os
+import bisect
 import warnings
 import math
 warnings.filterwarnings("ignore")
@@ -19,7 +20,18 @@ import warnings
 warnings.filterwarnings("ignore", message="numpy.dtype size changed")
 warnings.filterwarnings("ignore", message="numpy.ufunc size changed")
 import toolsets.denoising_related_functions as de
-def sort_spectra(msms):
+def check_spectrum(msms):
+    try:
+        mass, intensity = break_spectra(msms)
+    except:
+        print("it is not a spectrum!")
+        return()
+    if len(mass)<1 or len(intensity)<1 or max(intensity)==0:
+        print("spectrum is empty!")
+        return(-1)
+    return(sum(intensity))
+
+def sort_spectrum(msms):
     mass, intensity = break_spectra(msms)
     mass_sorted, intensity_sorted = zip(*sorted(zip(mass, intensity)))
     return(pack_spectra(list(mass_sorted), list(intensity_sorted)))
@@ -33,18 +45,49 @@ def set_tolerance(mass_error, ifppm, precursormz):
     else:
         tol = mass_error
     return(tol)
-
-
-def bin_spectra(msms, precursormz,tolerance = 0.01, ifnormalize = False, ifppm = False):
-    if ifppm:
-        if float(precursormz) <400:
-            tol = 0.004
-        else:
-            tol = float(precursormz)*(tolerance/1E6)
+def clean_spectrum(msms, 
+                    max_mz: float = None, 
+                    tolerance:float = 0.05,
+                    ifppm: bool = False,
+                    noise_level: float = 0.000):
+    # remove precursor peak
+    msms = sort_spectrum(msms)
+    max_mz = float(max_mz)
+    tol = set_tolerance(mass_error=tolerance, 
+        ifppm = ifppm,precursormz = max_mz)
+    if tolerance is None:
+        raise RuntimeError("MS2 tolerance need to be set!")
+    if max_mz is not None:
+        msms = truncate_msms(msms, max_mz-1.5)
+    # bin spectra
+    if msms is not np.NAN:
+        msms = bin_spectrum(msms=msms, precursormz = max_mz, tol = tol)
+        # remove noise by level
+        # msms = denoising_by_threshold(msms=msms, threshold = noise_level)
+        msms = sort_spectrum(msms)
+        msms = normalize_spectrum(msms)
+        return(msms)
     else:
-        tol = tolerance
-    # if ifnormalize == True:
+        return(msms)
+
+def truncate_msms(msms, max_mz):
+    # if need_normalize:
     #     msms = normalize_spectra(msms)
+    #     msms = so.sort_spectra(msms)
+    # else:
+    #     msms = so.sort_spectra(msms)
+    mass, intensity = break_spectra(msms)
+    upper_allowed = bisect.bisect_left(mass, max_mz)
+    # pep_index = mass.index(parention)
+    mass_frag = mass[0:upper_allowed]
+    intensity_frag = intensity[0:upper_allowed]
+    if len(mass_frag)>0 and len(intensity_frag)>0:
+        return((pack_spectra(mass_frag, intensity_frag)))
+    else:
+        return(pack_spectra([],[]))
+
+
+def bin_spectrum(msms, precursormz,tol = 0.05):
     mass_temp, intensity_temp = break_spectra(msms)
     bin_left = pd.DataFrame({'mass': mass_temp, 'intensity': intensity_temp})
     mass_bin = []
@@ -59,53 +102,52 @@ def bin_spectra(msms, precursormz,tolerance = 0.01, ifnormalize = False, ifppm =
         # mass_bin.append(round(bin['mass'][max_index], 6))
         # intensity_bin.append(round(bin['intensity'].max(),6))
         intensity_bin.append(round(bin['intensity'].sum(),6))
-    msms_bin = sort_spectra(pack_spectra(mass_bin, intensity_bin))
-    if ifnormalize:
-        return(normalize_spectra(msms_bin))
-    else:
-        return(msms_bin)
+    msms_bin = sort_spectrum(pack_spectra(mass_bin, intensity_bin))
+    return(msms_bin)
+    # if ifnormalize:
+    #     return(normalize_spectra(msms_bin))
+    # else:
+    #     return(msms_bin)
 
-def weighted_average_spectra(data_subset, typeofmsms = 'msms', mass_error = 10, ifppm = True):
+def weighted_average_spectra(data_subset, typeofmsms = 'peaks', mass_error = 0.05, ifppm = False):
     # if(len(data_subset)<2):
     #     print("you cannot make weighted average spectra using only 1 spectra")
     #     return(np.NAN)
-    precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
+    precursormz = float(data_subset.iloc[0]['reference_precursor_mz'])
     tol = set_tolerance(mass_error, ifppm = ifppm, precursormz=precursormz)
 
     # msms_com = []
     mass_com = []
     intensity_com = []
-    ms1_intensity_com =[]
-    # sum = 0
+    ms1_intensity_ratio =[]
+    label = 0
     for index, row in data_subset.iterrows():
-        msms_bin_temp =normalize_spectra(row[typeofmsms])
-        # msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=False, ifppm =ifppm)
-        # msms_bin_temp = row[typeofmsms]
+        # msms_bin_temp =normalize_spectra(row[typeofmsms])
+        # msms_bin_temp = bin_spectrum(row[typeofmsms],precursormz, tol,ifnormalize=False, ifppm =ifppm)
+        msms_bin_temp = row[typeofmsms]
         mass_temp, intensity_temp = break_spectra(msms_bin_temp)
         mass_com.extend(mass_temp)
         intensity_com.extend(intensity_temp)
         # num_peaks_com.extend(len(mass_temp))
-        ms1_intensity_com.extend([row['intensity']]*len(mass_temp))
+        ms1_intensity_ratio.extend([row['ms1_precursor_intensity']/data_subset['ms1_precursor_intensity'].sum()]*len(mass_temp))# five places to change
         # sum = sum +row['intensity']
-    bin_left = pd.DataFrame({'mass': mass_com, 'intensity': intensity_com, 'ms1_intensity':ms1_intensity_com})
+    bin_left = pd.DataFrame({'mass': mass_com, 'intensity': intensity_com, 'ms1_precursor_intensity_ratio':ms1_intensity_ratio})
+    bin_left['adjusted_intensity']=bin_left['intensity']*bin_left['ms1_precursor_intensity_ratio']
+    # msms_binned = pack_spectra(bin_left['mass'].tolist(), bin_left['adjusted_intensity'].tolist())
+    # msms_binned = normalize_spectra(msms_binned)
     # return(bin_left)
     mass_consensus = []
     intensity_consensus =[]
     while(len(bin_left)>0):
         bin, bin_left = make_bin(bin_left, tol)
-        sum = bin['ms1_intensity'].sum()
-        # if ifold:
-        #     sum =bin['ms1_intensity'].unique().sum()
-        # else:
-        #     sum =bin['ms1_intensity'].sum()
-        temp_mass = bin['mass']*bin['ms1_intensity']/sum
-        temp_intensity =bin['intensity']*bin['ms1_intensity']/sum
+        temp_mass = bin['mass']*bin['ms1_precursor_intensity_ratio']/bin['ms1_precursor_intensity_ratio'].sum()
+        temp_intensity =bin['adjusted_intensity']
         mass_consensus.append(round(temp_mass.sum(),6))
         intensity_consensus.append(round(temp_intensity.sum(),6))
 
-    msms_consensus = sort_spectra(pack_spectra(mass_consensus, intensity_consensus))
+    msms_consensus = sort_spectrum(pack_spectra(mass_consensus, intensity_consensus))
     # msms_consensus = bin_spectra(msms_consensus,precursormz,tol, ifnormalize=True, ifppm =ifppm)
-    msms_consensus = normalize_spectra(msms_consensus)
+    msms_consensus = normalize_spectrum(msms_consensus)
     return(msms_consensus)
 
 
@@ -119,42 +161,121 @@ def make_bin(bin_left, tol):
 
 
 
-def make_composite_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, ifnormalize = False, ifppm = False):
-    precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
-    if ifppm:
-        if precursormz <400:
-            tol = 0.004
-        else:
-            tol = precursormz*(tolerance/1E6)
+
+def denoising_by_threshold(msms, threshold = 0.005):
+    mass_raw, intensity_raw = break_spectra(msms)
+    threshold_use = max(intensity_raw)*threshold
+    idx=[index for (index, number) in enumerate(intensity_raw) if number > threshold_use]
+    intensity_updated = [intensity_raw[i] for i in idx]
+    mass_updated = [mass_raw[i] for i in idx]
+    msms_updated = pack_spectra(mass_updated, intensity_updated)
+    return(msms_updated)
+
+def guess_charge(adduct):
+    if adduct[-1]=="+":
+        return('pos')
+    elif adduct[-1]=='-1':
+        return('neg')
     else:
-        tol = tolerance
-    mass_com = []
-    intensity_com = []
-    for index, row in data_subset.iterrows():
-
-        mass_temp, intensity_temp = break_spectra(normalize_spectra(row[typeofmsms]) )
-        mass_com.extend(mass_temp)
-        intensity_com.extend(intensity_temp)
-    msms_com = sort_spectra(pack_spectra(mass_com, intensity_com))
-    msms_com = bin_spectra(msms_com,precursormz, tol, ifppm =ifppm, ifnormalize=ifnormalize)
-    return((msms_com))
+        return(np.NAN)
 
 
+def break_spectra(spectra):
+    split_msms = re.split('\t|\n',spectra)
+    intensity = split_msms[1:][::2]
+    mass = split_msms[::2]
+    mass = [float(item) for item in mass]
+    intensity = [float(item) for item in intensity]
+    return(mass, intensity)
+
+def pack_spectra(mass, intensity):
+    if len(mass)>0 and len(intensity)>0:
+        intensity_return = [str(inten) + '\n' for (inten) in (intensity[:-1])]
+        intensity_return.append(str(intensity[-1]))
+        mass_cali_tab = [str(mas) + '\t' for (mas) in mass]
+        list_temp = [None]*(len(mass_cali_tab)+len(intensity_return))
+        list_temp[::2] = mass_cali_tab
+        list_temp[1::2] = intensity_return
+        list_temp = ''.join(list_temp)
+        return(list_temp)
+    else:
+        return(np.NaN)
 
 
-def adding_spectra(data_subset, typeofmsms = 'msms'):
-    mass_com = []
-    intensity_com = []
-    for index, row in data_subset.iterrows():
-        # msms_bin_temp =normalize_spectra(row[typeofmsms])
-        # msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=False, ifppm =ifppm)
-        mass_temp, intensity_temp = break_spectra(row[typeofmsms])
-        mass_com.extend(mass_temp)
-        intensity_com.extend(intensity_temp)
-        # num_peaks_com.extend(len(mass_temp))
-    msms_added = sort_spectra(pack_spectra(mass_com, intensity_com))
-    msms_added = normalize_spectra(msms_added)
-    return(msms_added)
+def convert_nist_to_string(msms):
+    mass = []
+    intensity = []
+    for n in range(0, len(msms)):
+        mass.append(msms[n][0])
+        intensity.append(msms[n][1])
+    return(pack_spectra(mass,intensity))
+
+def convert_scc_to_string(msms):
+    mass = []
+    intensity = []
+    lst = msms.split(';')
+    for l in range(len(lst)):
+        list_temp = lst[l].split(':')
+        mass.append(float(list_temp[0]))
+        intensity.append(float(list_temp[1]))
+    msms_return = pack_spectra(mass, intensity)
+    return(msms_return)
+
+def convert_string_to_nist(msms):
+    spec_raw = np.array([x.split('\t') for x in msms.split('\n')], dtype=np.float32)
+    return(spec_raw)
+
+def spectral_entropy(msms):
+    if msms is np.NAN:
+        return(msms)
+    return(scipy.stats.entropy(convert_string_to_nist(msms)[:, 1]))
+def normalized_entropy(msms, order = 4):
+    if msms is np.NAN:
+        return(msms)
+    npeak = num_peaks(msms)
+    normalized_entropy = (scipy.stats.entropy(convert_string_to_nist(msms)[:, 1])/math.log(npeak))**order
+    if pd.isna(normalized_entropy) == False:
+        return (normalized_entropy)
+    else:
+        return(-1)
+    
+
+# def make_composite_spectra(data_subset, typeofmsms = 'msms', tolerance = 0.01, ifnormalize = False, ifppm = False):
+#     precursormz = float(data_subset.iloc[0]['PRECURSORMZ'])
+#     if ifppm:
+#         if precursormz <400:
+#             tol = 0.004
+#         else:
+#             tol = precursormz*(tolerance/1E6)
+#     else:
+#         tol = tolerance
+#     mass_com = []
+#     intensity_com = []
+#     for index, row in data_subset.iterrows():
+
+#         mass_temp, intensity_temp = break_spectra(normalize_spectra(row[typeofmsms]) )
+#         mass_com.extend(mass_temp)
+#         intensity_com.extend(intensity_temp)
+#     msms_com = sort_spectra(pack_spectra(mass_com, intensity_com))
+#     msms_com = bin_spectra(msms_com,precursormz, tol, ifppm =ifppm, ifnormalize=ifnormalize)
+#     return((msms_com))
+
+
+
+
+# def straight_adding_spectra(data_subset, typeofmsms = 'peaks'):
+#     mass_com = []
+#     intensity_com = []
+#     for index, row in data_subset.iterrows():
+#         # msms_bin_temp =normalize_spectra(row[typeofmsms])
+#         # msms_bin_temp = bin_spectra(row[typeofmsms],precursormz, tol,ifnormalize=False, ifppm =ifppm)
+#         mass_temp, intensity_temp = break_spectra(row[typeofmsms])
+#         mass_com.extend(mass_temp)
+#         intensity_com.extend(intensity_temp)
+#         # num_peaks_com.extend(len(mass_temp))
+#     msms_added = sort_spectra(pack_spectra(mass_com, intensity_com))
+#     msms_added = normalize_spectra(msms_added)
+#     return(msms_added)
 
 
 
@@ -202,62 +323,25 @@ def adding_spectra(data_subset, typeofmsms = 'msms'):
 
 
 
-
-
-def denoising_by_threshold(msms, threshold = 1, need_normalized = False):
-    mass_raw, intensity_raw = break_spectra(msms)
-    if need_normalized == True:
-        intensity_normalized = [x/max(intensity_raw) for x in intensity_raw]
-    idx=[index for (index, number) in enumerate(intensity_normalized) if number > threshold]
-    intensity_updated = [intensity_normalized[i] for i in idx]
-    mass_updated = [mass_raw[i] for i in idx]
-    msms_updated = pack_spectra(mass_updated, intensity_updated)
-    return(msms_updated)
-
-
-
-
-def break_spectra(spectra):
-    split_msms = re.split('\t|\n',spectra)
-    intensity = split_msms[1:][::2]
-    mass = split_msms[::2]
-    mass = [float(item) for item in mass]
-    intensity = [float(item) for item in intensity]
-    return(mass, intensity)
-
-def pack_spectra(mass, intensity):
-    intensity_return = [str(inten) + '\n' for (inten) in (intensity[:-1])]
-    intensity_return.append(str(intensity[-1]))
-    mass_cali_tab = [str(mas) + '\t' for (mas) in mass]
-    list_temp = [None]*(len(mass_cali_tab)+len(intensity_return))
-    list_temp[::2] = mass_cali_tab
-    list_temp[1::2] = intensity_return
-    list_temp = ''.join(list_temp)
-    return(list_temp)
-
-
-def convert_nist_to_string(msms):
-    mass = []
-    intensity = []
-    for n in range(0, len(msms)):
-        mass.append(msms[n][0])
-        intensity.append(msms[n][1])
-    return(pack_spectra(mass,intensity))
-
-
-def convert_string_to_nist(msms):
-    spec_raw = np.array([x.split('\t') for x in msms.split('\n')], dtype=np.float32)
-    return(spec_raw)
-
-def normalized_entropy(msms, order = 4):
-    npeak = num_peaks(msms)
-    return ((scipy.stats.entropy(convert_string_to_nist(msms)[:, 1])/math.log(npeak))**order)
     # return(((scipy.stats.entropy(convert_string_to_nist(msms)[:, 1]))/math.log(npeak))^order)
+# needs further modification
+def entropy_similarity_default(msms1, msms2,pmz1 = None, pmz2 = None,NIST =False, method = 'entropy', need_clean = False):
 
-def entropy_similarity_default(msms1, msms2, typeofmsms='msms', threshold = 0.01):
-    # return(se.similarity(convert_string_to_nist(msms1), convert_string_to_nist(msms2), 'entropy', ms2_da = 0.01, need_clean_spectra = True, need_normalize_result = True))
-    return(se.similarity(convert_string_to_nist(msms1), convert_string_to_nist(msms2), 'entropy',
-                                     ms2_da = threshold, need_clean_spectra = True, need_normalize_result = True))
+    if NIST == True:
+        msms1 = convert_nist_to_string(msms1)
+        msms2 = convert_nist_to_string(msms2)
+    if need_clean == True:
+        if pmz1 != None and pmz2 != None:
+            msms1 = clean_spectrum(msms1, max_mz = pmz1, tolerance = 0.05, ifppm = False, noise_level = 0.005)
+            msms2 = clean_spectrum(msms2, max_mz = pmz2, tolerance = 0.05, ifppm = False, noise_level = 0.005)
+        else:
+            print("precursors for the 2 spectra needs to be supplemented")
+            return()
+        
+
+    return(se.similarity(convert_string_to_nist(msms1), convert_string_to_nist(msms2), 'entropy', 
+        ms2_da = 0.05, need_clean_spectra = False, need_normalize_result = True))
+
 
 
 
@@ -282,67 +366,75 @@ def average_entropy_dataframe(data_pfp, typeofmsms):
     data_pfp['Average_Entropy']= flat
     return(data_pfp)
 
-def duplicate_handling(data, typeofmsms='msms_recalibrated',mass_error = 0.01, ifppm = False, ifnormalize = True, method = 'weighedaverage'):
-    data_unique = data.drop_duplicates(subset=['key'])
-    # print("i am in new method")
-    consensus_msms = []
-    for key in tqdm(data_unique['key'].unique()):
-        data_temp =  data.loc[data['key']==key]
-        if len(data_temp) >1:
-            if method =='weighedaverage':
-                consensus_msms.append(weighted_average_spectra(data_temp, mass_error=mass_error, ifppm = ifppm, typeofmsms =typeofmsms))
-            # else:
-            #     consensus_msms.append(make_consensus_spectra(data_temp, tolerance=mass_error, ifppm = ifppm, typeofmsms =typeofmsms, ifnormalize=ifnormalize))
-        else:
-            consensus_msms.append(normalize_spectra(data_temp.iloc[0][typeofmsms]))
+# def duplicate_handling(data, typeofmsms='msms_recalibrated',mass_error = 0.01, ifppm = False, ifnormalize = True, method = 'weighedaverage'):
+#     data_unique = data.drop_duplicates(subset=['key'])
+#     # print("i am in new method")
+#     consensus_msms = []
+#     for key in tqdm(data_unique['key'].unique()):
+#         data_temp =  data.loc[data['key']==key]
+#         if len(data_temp) >1:
+#             if method =='weighedaverage':
+#                 consensus_msms.append(weighted_average_spectra(data_temp, mass_error=mass_error, ifppm = ifppm, typeofmsms =typeofmsms))
+#             # else:
+#             #     consensus_msms.append(make_consensus_spectra(data_temp, tolerance=mass_error, ifppm = ifppm, typeofmsms =typeofmsms, ifnormalize=ifnormalize))
+#         else:
+#             consensus_msms.append(normalize_spectra(data_temp.iloc[0][typeofmsms]))
 
 
-    data_unique['msms']=consensus_msms
-    # print("i am done processing the concensus spectra")
-    return(data_unique)
+#     data_unique['msms']=consensus_msms
+#     # print("i am done processing the concensus spectra")
+#     return(data_unique)
 import toolsets.denoising_related_functions as de
 
-def denoising(data, typeofmsms, mass_error = 0.01, ifppm = False):
+def denoising(data, typeofmsms, mass_error = 0.02, ifppm = False):
     msms_consensus_denoised = []
+    comments =[]
     # print("i am in new denoising method")
     for index, row in tqdm(data.iterrows(), total = data.shape[0]):
     # break
         try:
-            msms_consensus_denoised.append(de.denoise_blacklist(row, typeofmsms=typeofmsms, mass_error =mass_error, ifppm = ifppm))
+            msms_consensus_denoised.append(de.denoise_blacklist(row, typeofmsms=typeofmsms))
+            comments.append('denoised')
         except:
             msms_consensus_denoised.append(row[typeofmsms])
-    data['msms_r_u_d']=msms_consensus_denoised
+            comments.append('not denoised due to some errors')
+    denoised_column = typeofmsms+"_denoised"
+    data[denoised_column]=msms_consensus_denoised
+    data['denoised_comments']=comments
     return(data)
 
 
-def denoising_evaluation(data, msms1 = 'msms', msms2 = 'msms_denoised', min_explained_intensity = 80, allowed_max_unassigned_intensity = 30):
-    explained_intensity = []
-    max_unassigned_intensity = []
-    for index, row in (data.iterrows()):
-        explained_intensity.append(calculate_explained_intensity(row[msms1], row[msms2]))
-        max_unassigned_intensity.append(identify_max_unassigned_intensity(row[msms1], row[msms2]))
-    data['explained_intensity']=explained_intensity
-    data['max_unassigned_intensity']=max_unassigned_intensity
-    evaluations = []
-    # print(min_explained_intensity/10)
-    for index, row in (data.iterrows()):
-        if row['explained_intensity']<min_explained_intensity/100 and row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
-            evaluations.append('flagged: poor quality')
-        elif row['explained_intensity']<min_explained_intensity/100:
-            evaluations.append('flagged:low assigned intensity')
-        elif row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
-            evaluations.append('flagged: high unassigned intensity')
-        else:
-            evaluations.append('good quality')
-    data['evaluations']=evaluations
-    return(data)
+# def denoising_evaluation(data, msms1 = 'peaks_recalibrated', msms2 = 'peaks_recalibrated_denoised', min_explained_intensity = 80):
+#     explained_intensity = []
+#     max_unassigned_intensity = []
+#     for index, row in (data.iterrows()):
+#         explained_intensity.append(calculate_explained_intensity(row[msms1], row[msms2]))
+#         max_unassigned_intensity.append(identify_max_unassigned_intensity(row[msms1], row[msms2]))
+#     data['explained_intensity']=explained_intensity
+#     data['max_unassigned_intensity']=max_unassigned_intensity
+#     evaluations = []
+#     # print(min_explained_intensity/10)
+#     for index, row in (data.iterrows()):
+#         if row['explained_intensity']<min_explained_intensity/100 and row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
+#             evaluations.append('flagged: poor quality')
+#         elif row['explained_intensity']<min_explained_intensity/100:
+#             evaluations.append('flagged:low assigned intensity')
+#         elif row['max_unassigned_intensity']>allowed_max_unassigned_intensity:
+#             evaluations.append('flagged: high unassigned intensity')
+#         else:
+#             evaluations.append('good quality')
+#     data['evaluations']=evaluations
+#     return(data)
 
 
 
 
 def num_peaks(msms):
-    mass, intensity = break_spectra(msms)
-    return(len(mass))
+    if msms is np.NAN:
+        return(0)
+    else:
+        mass, intensity = break_spectra(msms)
+        return(len(mass))
 
 from operator import itemgetter
 
@@ -359,12 +451,16 @@ from operator import itemgetter
 #     rel_intensity_kept = [number / max([float(x) for x in intensity_raw])*100 for number in [float(y) for y in intensity_dr]]
 #     return(mass_diff,rel_intensity_diff,rel_intensity_kept)
 
-def normalize_spectra(msms):
+def normalize_spectrum(msms):
+    if msms is np.NAN:
+        return(msms)
     mass, intensity = break_spectra(msms)
     # mass_fl = [float(x) for x in mass]
     # intensity_fl = [float(x) for x in intensity]
-    intensity_rel = [number / max([float(x) for x in intensity])*100 for number in [float(y) for y in intensity]]
-    intensity_rel = [round(number, 6) for number in intensity_rel]
+    if max([float(x) for x in intensity]) == 0:
+        return(np.NaN)
+    intensity_rel = [number / sum([float(x) for x in intensity]) for number in [float(y) for y in intensity]]
+    intensity_rel = [round(number, 8) for number in intensity_rel]
     return(pack_spectra(mass, intensity_rel))
 
 
@@ -386,33 +482,44 @@ def normalize_spectra(msms):
 
 
 
-
+# from toolsets.denoising_related_functions import remove_precursor
 # below is some evaluation functions
-def calculate_explained_intensity(msms1, msms2):
+def calculate_explained_intensity(msms1, msms2, parent_ion):
+    if msms1 is np.NAN or msms2 is np.NAN:
+        return(0)
     if(num_peaks(msms1)<num_peaks(msms2)):
         temp_msms = msms1
         msms1 = msms2
         msms2 = temp_msms
-    mass_raw, intensity_raw = break_spectra(msms1)
-    mass_dr, intensity_dr = break_spectra(msms2)
-    return(sum(intensity_dr)/sum(intensity_raw))
 
-def identify_max_unassigned_intensity(msms1, msms2):
+    # mass_raw, intensity_raw = break_spectra(msms1)
+    mass_frag_raw, intensity_frag_raw= break_spectra(truncate_msms(msms1, parent_ion)) 
+    # mass_dr, intensity_dr = break_spectra(msms2)
+    mass_frag_dr, intensity_frag_dr = break_spectra(truncate_msms(msms2, parent_ion))
+    if sum(intensity_frag_raw)==0:
+        return(np.NaN)
+    else:
+        return(round(sum(intensity_frag_dr)/sum(intensity_frag_raw)*100, 5))
+
+def identify_max_unassigned_intensity(msms1, msms2,parent_ion):
     if(num_peaks(msms1)<num_peaks(msms2)):
         temp_msms = msms1
         msms1 = msms2
         msms2 = temp_msms
     mass_raw, intensity_raw = break_spectra(msms1)
-    mass_de, intensity_de = break_spectra(msms2)
-    diff_index = [i for i, item in enumerate(mass_raw) if item not in set(mass_de)]
+    mass_frag_raw, intensity_frag_raw, mass_precursor_raw, intensity_precursor_raw = remove_precursor(mass_raw,intensity_raw, parent_ion)
+    mass_dr, intensity_dr = break_spectra(msms2)
+    mass_frag_dr, intensity_frag_dr, mass_precursor_dr, intensity_precursor_dr = remove_precursor(mass_dr,intensity_dr, parent_ion)
+
+    diff_index = [i for i, item in enumerate(mass_frag_raw) if item not in set(mass_frag_dr)]
     # return(diff_index)
     if(len(diff_index)>1):
         # print("i am in wrong if")
-        intensity_diff = list(itemgetter(*diff_index)(intensity_raw))
+        intensity_diff = list(itemgetter(*diff_index)(intensity_frag_raw))
         return(max(intensity_diff))
     elif(len(diff_index)==1):
         # print("i am in right if")
-        return(intensity_raw[diff_index[0]])
+        return(intensity_frag_raw[diff_index[0]])
     else:
         return(0)
     #
@@ -438,156 +545,6 @@ def identify_unassigned_intensity(msms1, msms2):
         return(-1)
 
 
-def export_library_msp(data_dup,output_location, typeofmsms='msms', ifcollision_energy = False):
-    entry = ''
-    for index, row in data_dup.iterrows():
-        entry = entry + 'Name: ' + row['NAME'] + '\n'
-        entry = entry +'Spectrum_type: '+row['Spectrum_type']+ '\n'
-        entry = entry + 'PrecursorMZ: ' + str(row['PRECURSORMZ']) + '\n'
-        entry = entry + 'InChIKey: ' + str(row['InChIKey']) + '\n'
-        entry = entry + 'Formula: ' + row['Formula'] + '\n'
-        entry = entry + 'ExactMass: ' + str(row['ExactMass']) + '\n'
-        entry = entry + 'Precursor_type: ' + row['Adduct'] + '\n'
-        if ifcollision_energy:
-            entry = entry + 'Collision_enerty: ' + str(row['Collision_energy']) + '\n'
-        # entry = entry + 'RETENTIONTIME: ' + str(row['RETENTIONTIME']) + '\n'
-        entry = entry+'Ion_mode: '+row['Ion_mode']+ '\n'
-        entry = entry + 'Comment: ' + str(row['Comment']) + '\n'
-        entry = entry + 'Num peaks: ' + str(num_peaks(row[typeofmsms])) + '\n'
-        entry = entry + row[typeofmsms]
-        # entry = entry +str(row['count'])
-        entry = entry + '\n'
-        entry = entry + '\n'
 
-    #open text file
-    text_file = open(output_location, "w",encoding='utf-8')
-     
-    #write string to file
-    text_file.write(entry)
-     
-    #close file
-    text_file.close()
-
-def export_ms_sirius(row, output):
-    # if row['Adduct'][-1]=='+':
-    #         charge = '1+'
-    #     else:
-    #         charge = '1-'
-    mass_1, intensity_1 = break_spectra(row['ms1'])
-    pep_mass =de.find_parention(mass_1,intensity_1, row['PRECURSORMZ'])
-    entry = ''
-    entry = entry + '>compound '+str(row['NAME'])+'\n'
-    entry = entry + '>parentmass '+str((pep_mass))+'\n'
-    entry = entry + '>ionization '+str((row['Adduct']))+'\n'
-    entry = entry +'\n'
-    entry = entry + '>collision 35' + '\n'
-    entry = entry+(row['msms'])+'\n'
-    entry = entry +'\n'
-    entry = entry +'\n'
-    entry = entry + '>ms1peaks' + '\n'
-    entry = entry+(row['ms1'])+'\n'
-    entry = entry +'\n'
-    text_file = open(output+'.ms', "w",encoding='utf-8')
-    text_file.write(entry)
-    text_file.close()
-
-
-
-def export_mgf_sirius(inputfile, output):
-
-    entry = ''
-    for index, row in inputfile.iterrows():
-
-        mass_1, intensity_1 = break_spectra(row['ms1'])
-        if row['Adduct'][-1]=='+':
-            charge = '1+'
-        else:
-            charge = '1-'
-        pep_mass =de.find_parention(mass_1,intensity_1, row['PRECURSORMZ'])
-        # output = os.path.join(output_dir, row['NAME']+'.mgf')
-        # ms1
-        entry = entry + 'BEGIN IONS'+'\n'
-        entry = entry + 'PEPMASS='+str(pep_mass)+'\n'
-        entry = entry + 'MSLEVEL=1'+'\n'
-        entry = entry+'CHARGE=' + charge +'\n'
-#         entry = entry+'Adduct=' +str(row['adduct']) +'\n'
-        entry = entry+(row['ms1'])+'\n'
-        entry = entry + 'END IONS'+'\n'
-        entry = entry +'\n'
-    #     ms2
-        entry = entry + 'BEGIN IONS'+'\n'
-        entry = entry + 'PEPMASS='+str(pep_mass)+'\n'
-        entry = entry + 'MSLEVEL=2'+'\n'
-        entry = entry+'CHARGE=' + charge +'\n'
-        entry = entry+(row['msms'])+'\n'
-        entry = entry + 'END IONS'+'\n'
-    text_file = open(output+'.mgf', "w",encoding='utf-8')
-    text_file.write(entry)
-    text_file.close()
-        # break
-
-def export_mat(data,output_location, typeofms1='ms1',typeofmsms = 'msms', ifcollision_energy = True):
-    entry = ''
-    for index, row in data.iterrows():
-        entry = entry + 'NAME: ' + row['NAME'] + '\n'
-        entry = entry + 'PrecursorMZ: ' + str(row['PRECURSORMZ']) + '\n'
-        entry = entry + 'PRECURSORTYPE: ' + row['Adduct'] + '\n'
-        entry = entry + 'INSTRUMENTTYPE: ' +'\n' #empty line
-        entry = entry + 'INSTRUMENT: ' +'\n'
-        entry = entry + 'Authors: ' +'Arpana, Parker and Fanzhou'+'\n'
-        entry = entry + 'License: '+'\n'
-        entry = entry + 'FORMULA: ' + str(row['Formula']) + '\n'
-        entry = entry + 'ONTOLOGY: ' +'\n'
-        entry = entry + 'SMILES: ' +'\n'
-        entry = entry + 'INCHIKEY: ' + row['InChIKey'] + '\n'
-        entry = entry + 'INCHI: ' +'\n'
-        entry = entry+'IONMODE: '+row['Ion_mode']+ '\n'
-        if ifcollision_energy:
-            entry = entry + 'Collision_enerty: ' + str(row['Collision_energy']) +'eV'+ '\n'
-        entry = entry+'SPECTRUMTYPE: Centroid and composite'+ '\n'
-        entry = entry + 'METABOLITENAME: ' + '\n'
-        entry = entry + 'SCANNUMBER: Alignment ID '+str(row['Alignment_ID']) + '\n'
-        entry = entry + 'RETENTIONTIME: ' + str(row['RETENTIONTIME']) + '\n'
-        entry = entry + 'RETENTIONINDEX: N/A' +'\n'
-        entry = entry + 'CCS: ' +'\n'
-        entry = entry + 'INTENSITY: ' +str(row['intensity'])+'\n'
-        entry = entry + '#Specific field for labeled experiment' +'\n'
-        entry = entry + 'IsMarked: False' +'\n'
-        entry = entry + 'Comment: ' + str(row['Comment']) + '\n'
-        entry = entry + 'MSTYPE: MS1'+ '\n'
-        entry = entry + 'Num Peaks: ' + str(num_peaks(row[typeofms1])) + '\n'
-        mass1, intensity1= break_spectra(row[typeofms1])
-        for i in range(0, len(mass1)):
-            entry = entry + str(mass1[i]) +'\t'+ str(intensity1[i]) + '\t'+'"'+str(mass1[i])+'"'+'\n'
-        entry = entry + 'MSTYPE: MS2'+ '\n'
-        entry = entry + 'Num Peaks: ' + str(num_peaks(row[typeofmsms])) + '\n'
-        mass2, intensity2= break_spectra(row[typeofmsms])
-        for i in range(0, len(mass2)):
-            entry = entry + str(mass2[i]) +'\t'+ str(intensity2[i]) + '\t'+'"'+str(mass2[i])+'"'+'\n'
-        entry = entry + '\n'
-        #
-        #
-        # entry = entry +'Spectrum_type: '+row['Spectrum_type']+ '\n'
-        #
-        # entry = entry + 'InChIKey: ' + row['InChIKey'] + '\n'
-        #
-        # entry = entry + 'ExactMass: ' + str(row['ExactMass']) + '\n'
-        #
-        #
-        #
-        # entry = entry + 'Num peaks: ' + str(num_peaks(row[typeofmsms])) + '\n'
-        # entry = entry + row[typeofmsms]
-        # # entry = entry +str(row['count'])
-
-        # entry = entry + '\n'
-
-    #open text file
-    text_file = open(output_location, "w",encoding='utf-8')
-
-    #write string to file
-    text_file.write(entry)
-
-    #close file
-    text_file.close()
 # print("i am spectra operation")
 
