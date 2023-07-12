@@ -1,0 +1,8 @@
+numpy
+pandas
+seaborn
+tqdm
+ast
+requests
+molmass
+scipy
