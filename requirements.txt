@@ -1,0 +1,26 @@
+numpy==1.24.4
+pandas==2.0.3
+seaborn==0.12.2
+tqdm==4.65.0
+requests==2.31.0
+molmass==2023.4.10
+scipy==1.10.1
+## The following requirements were added by pip freeze:
+certifi==2023.5.7
+charset-normalizer==3.2.0
+contourpy==1.1.0
+cycler==0.11.0
+fonttools==4.41.0
+idna==3.4
+importlib-resources==6.0.0
+kiwisolver==1.4.4
+matplotlib==3.7.2
+packaging==23.1
+Pillow==10.0.0
+pyparsing==3.0.9
+python-dateutil==2.8.2
+pytz==2023.3
+six==1.16.0
+tzdata==2023.3
+urllib3==2.0.3
+zipp==3.16.0
